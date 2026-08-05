@@ -53,7 +53,12 @@ class ProductOffer(BaseModel):
 
     # Availability as shown on the page.
     in_stock: Optional[bool] = None
+    stock_qty: Optional[int] = Field(None, description="Units in stock if the page states it")
     availability_raw: Optional[str] = None
+
+    # Extra attributes useful for BOM matching / scoring later.
+    package: Optional[str] = Field(None, description="Package/footprint as listed by the vendor")
+    part_type: Optional[str] = Field(None, description="Original / Copy / Refurbished")
 
     crawled_at: datetime = Field(default_factory=_utcnow)
 

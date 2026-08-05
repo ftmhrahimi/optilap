@@ -3,12 +3,17 @@
 Public surface:
     from optilap_crawler import crawl_part, crawl_parts
     from optilap_crawler.registry import get_crawler, all_vendor_names
+
+Crawls are synchronous and use a ``requests`` session by default (the verified
+shops are server-rendered). Pass ``CrawlerConfig(use_browser=True)`` for a
+future JavaScript-only vendor.
 """
 from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
 from .base import BaseVendorCrawler, CrawlerConfig, FailureMonitor
+from .fetch import Fetcher, HttpFetcher
 from .models import CrawlResult, CrawlStatus, ProductOffer
 from .registry import all_vendor_names, get_crawler
 
@@ -16,6 +21,8 @@ __all__ = [
     "BaseVendorCrawler",
     "CrawlerConfig",
     "FailureMonitor",
+    "Fetcher",
+    "HttpFetcher",
     "CrawlResult",
     "CrawlStatus",
     "ProductOffer",
@@ -26,46 +33,51 @@ __all__ = [
 ]
 
 
-async def _run(vendor: str, parts: Sequence[str], config: Optional[CrawlerConfig],
-               monitor: Optional[FailureMonitor]) -> List[CrawlResult]:
-    from playwright.async_api import async_playwright
+def _make_fetcher(config: CrawlerConfig) -> Fetcher:
+    if config.use_browser:
+        from .fetch import PlaywrightFetcher
 
-    crawler_cls = get_crawler(vendor)
-    cfg = config or CrawlerConfig()
-    crawler = crawler_cls(cfg)
-
-    results: List[CrawlResult] = []
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=cfg.headless)
-        context = await browser.new_context(user_agent=cfg.user_agent, locale=cfg.locale)
-        try:
-            for part in parts:
-                result = await crawler.crawl(part, context)
-                if monitor is not None:
-                    monitor.observe(result)
-                results.append(result)
-        finally:
-            await context.close()
-            await browser.close()
-    return results
+        return PlaywrightFetcher()
+    return HttpFetcher(
+        timeout=config.timeout,
+        max_retries=config.max_retries,
+        backoff_base_s=config.backoff_base_s,
+    )
 
 
-async def crawl_parts(
+def crawl_parts(
     vendor: str,
     parts: Sequence[str],
     config: Optional[CrawlerConfig] = None,
     monitor: Optional[FailureMonitor] = None,
+    fetcher: Optional[Fetcher] = None,
 ) -> List[CrawlResult]:
-    """Crawl several parts from one vendor, reusing a single browser."""
-    return await _run(vendor, list(parts), config, monitor)
+    """Crawl several parts from one vendor, reusing a single fetcher/session."""
+    cfg = config or CrawlerConfig()
+    crawler = get_crawler(vendor)(cfg)
+
+    own_fetcher = fetcher is None
+    fetcher = fetcher or _make_fetcher(cfg)
+
+    results: List[CrawlResult] = []
+    try:
+        for part in parts:
+            result = crawler.crawl(part, fetcher)
+            if monitor is not None:
+                monitor.observe(result)
+            results.append(result)
+    finally:
+        if own_fetcher and hasattr(fetcher, "close"):
+            fetcher.close()  # type: ignore[attr-defined]
+    return results
 
 
-async def crawl_part(
+def crawl_part(
     vendor: str,
     part: str,
     config: Optional[CrawlerConfig] = None,
     monitor: Optional[FailureMonitor] = None,
+    fetcher: Optional[Fetcher] = None,
 ) -> CrawlResult:
     """Crawl a single part from one vendor."""
-    results = await _run(vendor, [part], config, monitor)
-    return results[0]
+    return crawl_parts(vendor, [part], config=config, monitor=monitor, fetcher=fetcher)[0]
