@@ -5,7 +5,17 @@ assumption: *"can we stably crawl the vendor sites?"*). It crawls a vendor's
 search results for a part and returns normalized **price + stock** offers, ready
 to feed the `referencePriceList` and the Scoring Engine.
 
-First vendor: **JavanElectronic** (`https://www.javanelec.com`, Tehran).
+## Vendors implemented
+
+| Vendor | Platform | Search | Status |
+| --- | --- | --- | --- |
+| **JavanElectronic** | custom ASP.NET Core | `…/shop?searchfilter=` | verified against live site |
+| **ECA** | PrestaShop | `…/search?controller=search&s=` | selectors from standard PrestaShop — **needs live calibration** |
+| **MicroModern** | WooCommerce / WordPress | `…/?q=…&post_type=product` | selectors from standard WooCommerce — **needs live calibration** |
+
+All three share one extraction engine (`extract.py`) for the Persian price /
+stock / package / type text; each vendor file only declares its platform's CSS
+selectors. That's why adding a vendor is small.
 
 ## How JavanElectronic actually works (important)
 
@@ -47,9 +57,12 @@ optilap_crawler/
   normalize.py   # Persian/Arabic digits, Toman/Rial prices, stock phrases
   models.py      # ProductOffer, CrawlResult, CrawlStatus (pydantic)
   fetch.py       # HttpFetcher (requests, default) + optional PlaywrightFetcher
+  extract.py     # shared parsing: links, price, stock, package, type, build_offer
   base.py        # two-stage crawl orchestration, retry, FailureMonitor
   vendors/
-    javanelec.py # JavanElectronic: find_product_urls + parse_product
+    javanelec.py    # custom ASP.NET Core
+    eca.py          # PrestaShop
+    micromodern.py  # WooCommerce / WordPress
   registry.py    # fixed vendor list
   bom.py         # read part numbers + quantities from a BOM .xlsx
 scripts/
@@ -68,14 +81,16 @@ pip install -r requirements.txt
 ## Use
 
 ```bash
-# one part
+# one part, any registered vendor
 python scripts/crawl.py --vendor JavanElectronic --part LM358
+python scripts/crawl.py --vendor ECA --part LM358
+python scripts/crawl.py --vendor MicroModern --part LM358
 
 # a whole BOM -> JSON (first 5 parts while testing)
-python scripts/crawl.py --bom fixtures/bom_sample.xlsx --limit 5 --out results.json
+python scripts/crawl.py --vendor ECA --bom fixtures/bom_sample.xlsx --limit 5 --out results.json
 
-# see the raw structure for a part (search links + first product parse)
-python scripts/inspect_site.py --part LM358
+# calibrate/debug a vendor: shows search links + first product parse
+python scripts/inspect_site.py --vendor ECA --part LM358
 ```
 
 ```python
@@ -87,7 +102,7 @@ print(r.status, len(r.offers), r.best_offer())
 ## Test
 
 ```bash
-python -m pytest -q      # 15 tests, no network required
+python -m pytest -q      # 21 tests, no network required
 ```
 
 ## Adding the next vendor
