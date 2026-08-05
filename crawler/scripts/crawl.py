@@ -20,6 +20,14 @@ import sys
 from pathlib import Path
 from typing import List
 
+# Persian output breaks the default Windows console/file codec (cp1252). Force
+# UTF-8 for stdout/stderr so printing Persian titles never crashes.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001 - older Pythons / non-reconfigurable streams
+        pass
+
 # Make the package importable when run directly from scripts/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -141,7 +149,9 @@ def main(argv=None) -> int:
 
     if args.out:
         payload = [json.loads(r.model_dump_json()) for r in results]
-        Path(args.out).write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+        Path(args.out).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         print(f"\nWrote {args.out}", file=sys.stderr)
 
     # Non-zero exit only if every crawl errored (useful in CI/monitoring).

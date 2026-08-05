@@ -15,6 +15,13 @@ import argparse
 import sys
 from pathlib import Path
 
+# Force UTF-8 console output so Persian text can't crash the Windows console.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from optilap_crawler.fetch import HttpFetcher  # noqa: E402
