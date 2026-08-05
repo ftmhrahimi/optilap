@@ -1,0 +1,6 @@
+playwright>=1.44
+beautifulsoup4>=4.12
+openpyxl>=3.1
+pydantic>=2.6
+# dev/test
+pytest>=8.0
