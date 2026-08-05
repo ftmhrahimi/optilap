@@ -9,12 +9,16 @@ from __future__ import annotations
 from typing import Dict, List, Type
 
 from .base import BaseVendorCrawler
+from .vendors.eca import ECACrawler
 from .vendors.javanelec import JavanElectronicCrawler
+from .vendors.micromodern import MicroModernCrawler
 
 # Ordered so the "first 2-3 vendors" of week 1 are obvious.
 _CRAWLERS: List[Type[BaseVendorCrawler]] = [
-    JavanElectronicCrawler,
-    # ECA, MicroModern, ... to be added as their scrapers are written.
+    JavanElectronicCrawler,   # custom ASP.NET Core
+    ECACrawler,               # PrestaShop
+    MicroModernCrawler,       # WooCommerce / WordPress
+    # remaining vendors from Vendors_V1.0.xlsx to be added next.
 ]
 
 REGISTRY: Dict[str, Type[BaseVendorCrawler]] = {
