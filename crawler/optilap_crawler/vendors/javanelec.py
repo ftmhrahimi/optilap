@@ -147,6 +147,8 @@ class JavanElectronicCrawler(BaseVendorCrawler):
             return "Copy"
         if "بازسازی" in raw:
             return "Refurbished"
+        if "اورجینال" in raw or "اصل" in raw:
+            return "Original"
         return raw or "Original"
 
     def _extract_image(self, soup: BeautifulSoup) -> Optional[str]:

@@ -48,7 +48,7 @@ def test_parse_product_in_stock():
     assert offer.in_stock is True
     assert offer.stock_qty == 42          # Persian digits normalized
     assert offer.package == "SO-8"
-    assert offer.part_type == "اورجینال"  # not a copy/refurb keyword
+    assert offer.part_type == "Original"  # اورجینال -> Original
 
 
 def test_parse_product_out_of_stock_copy():
