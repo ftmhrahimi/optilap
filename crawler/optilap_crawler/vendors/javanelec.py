@@ -1,118 +1,42 @@
 """Crawler for JavanElectronic — https://www.javanelec.com  (Tehran).
 
-Stack (from Vendors_V1.0.xlsx): ASP.NET Core + JavaScript.
 Search pattern: https://www.javanelec.com/shop?searchfilter=[PART_NAME]
 
-Parsing strategy
-----------------
-The exact CSS classes on the results page can only be confirmed against the
-live DOM (blocked from the build environment by egress policy). So parsing runs
-in two tiers:
+The site is **server-rendered and two-stage**:
+  * ``/shop?searchfilter=...`` returns a listing whose product links look like
+    ``/shop/product/<id>/<slug>`` — but with **no price** on the listing;
+  * each product page carries the price ("… تومان"), stock ("موجود در انبار N"),
+    package ("پکیج: …") and part type ("نوع قطعه: …").
 
-  1. **Configured selectors** — ``SELECTORS`` below. Fill these in once you have
-     a real results page (use ``scripts/inspect_site.py`` to dump one). This is
-     the fast, precise path.
-  2. **Heuristic fallback** — if the configured card selector matches nothing,
-     we locate every element that contains a price (Toman/Rial) and treat its
-     nearest sensible container as a product card. This keeps the crawler
-     returning *something* useful before calibration and resilient if the site
-     tweaks a class name.
-
-``parse_results_html`` is a pure function so it can be unit-tested against a
-saved HTML fixture with no browser involved.
+Both hooks below are pure functions (HTML string in, data out), so they can be
+unit-tested against saved fixtures with no network.
 """
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 from urllib.parse import urljoin
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
 from ..base import BaseVendorCrawler
 from ..models import ProductOffer
-from ..normalize import (
-    detect_availability,
-    normalize_digits,
-    parse_price,
-)
+from ..normalize import normalize_digits, parse_price
 
-# ---------------------------------------------------------------------------
-# CALIBRATION POINT — verify these against a live results page and edit as
-# needed. Each key holds a list of candidate CSS selectors tried in order.
-# ---------------------------------------------------------------------------
-SELECTORS = {
-    # A single product card on the search results grid.
-    "product_card": [
-        ".product-item",
-        ".product-box",
-        ".productItem",
-        "li.product",
-        "div.product",
-        "[class*='product-item']",
-    ],
-    # Product title / link inside a card.
-    "title": [".product-title a", ".product-title", "a.product-title", "h3 a", "h2 a", "a[title]"],
-    # Anchor to the product detail page.
-    "link": ["a.product-title", ".product-title a", "a[href*='/product']", "a[href]"],
-    # Price element inside a card.
-    "price": [".price", ".product-price", "[class*='price']", ".money"],
-    # Availability / stock badge or add-to-cart control inside a card.
-    "availability": [".stock", ".availability", "[class*='stock']", ".add-to-cart", "button"],
-    "image": ["img"],
-}
+# A product-detail link on the search results page.
+_PRODUCT_HREF_MARKER = "/shop/product/"
 
-# Tokens that mark a text node as containing a price (post digit-normalization).
-_PRICE_UNIT_TOKENS = ("تومان", "ریال", "﷼")
+# Price shown as "<number> تومان" (or ریال). Digits may be Persian; we normalize
+# first, so the pattern only needs ASCII digits + grouping separators.
+_PRICE_TOMAN_RE = re.compile(r"([\d,][\d,]*)\s*تومان")
+_PRICE_RIAL_RE = re.compile(r"([\d,][\d,]*)\s*(?:ریال|﷼)")
+# Fallback: any number with >= 5 digits (Toman prices on this shop).
+_BIG_NUMBER_RE = re.compile(r"\d[\d,]{4,}")
 
-
-def _first_match(root: Tag, selectors: List[str]) -> Optional[Tag]:
-    for sel in selectors:
-        try:
-            found = root.select_one(sel)
-        except Exception:  # noqa: BLE001 - bad selector shouldn't kill the crawl
-            continue
-        if found is not None:
-            return found
-    return None
-
-
-def _select_cards(soup: BeautifulSoup) -> List[Tag]:
-    for sel in SELECTORS["product_card"]:
-        try:
-            cards = soup.select(sel)
-        except Exception:  # noqa: BLE001
-            continue
-        if cards:
-            return cards
-    return []
-
-
-def _looks_like_price(text: str) -> bool:
-    norm = normalize_digits(text)
-    return any(tok in norm for tok in _PRICE_UNIT_TOKENS) and any(c.isdigit() for c in norm)
-
-
-def _heuristic_cards(soup: BeautifulSoup) -> List[Tag]:
-    """Fallback: derive product cards from elements that contain a price.
-
-    For each price-bearing leaf element, walk up a few levels to a container
-    that also holds a link — that container is very likely one product card.
-    """
-    cards: List[Tag] = []
-    seen: set[int] = set()
-    for node in soup.find_all(string=lambda s: bool(s) and _looks_like_price(s)):
-        container = node.parent
-        # Climb until we find an ancestor that also contains an <a href>.
-        for _ in range(5):
-            if container is None or not isinstance(container, Tag):
-                break
-            if container.find("a", href=True) is not None:
-                break
-            container = container.parent
-        if isinstance(container, Tag) and id(container) not in seen:
-            seen.add(id(container))
-            cards.append(container)
-    return cards
+_STOCK_RE = re.compile(r"موجود در انبار\s*([\d,]+)")
+_OUT_OF_STOCK_RE = re.compile(r"ناموجود|اتمام موجودی|تمام شد")
+_PACKAGE_RE = re.compile(r"پکیج\s*:?\s*(.+)")
+_PART_TYPE_RE = re.compile(r"نوع قطعه\s*:?\s*(.+)")
 
 
 class JavanElectronicCrawler(BaseVendorCrawler):
@@ -120,47 +44,45 @@ class JavanElectronicCrawler(BaseVendorCrawler):
     base_url = "https://www.javanelec.com"
     search_pattern = "https://www.javanelec.com/shop?searchfilter=[PART_NAME]"
 
-    async def wait_for_results(self, page) -> None:
-        # Wait for any configured product-card selector to appear, else fall
-        # back to the base networkidle wait. Keeps flaky XHR pages honest.
-        for sel in SELECTORS["product_card"]:
-            try:
-                await page.wait_for_selector(sel, timeout=5_000)
-                return
-            except Exception:  # noqa: BLE001
+    # -- Stage 1 -------------------------------------------------------------
+    def find_product_urls(self, search_html: str) -> List[str]:
+        soup = BeautifulSoup(search_html, "html.parser")
+        urls: List[str] = []
+        seen: set[str] = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if _PRODUCT_HREF_MARKER not in href:
                 continue
-        await super().wait_for_results(page)
+            link = urljoin(self.base_url, href)
+            if link not in seen:
+                seen.add(link)
+                urls.append(link)
+        return urls
 
-    def parse_results_html(self, html: str, part_query: str) -> List[ProductOffer]:
+    # -- Stage 2 -------------------------------------------------------------
+    def parse_product(self, html: str, url: str, part_query: str) -> Optional[ProductOffer]:
         soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text("\n", strip=True)
+        norm = normalize_digits(text)
 
-        cards = _select_cards(soup)
-        if not cards:
-            cards = _heuristic_cards(soup)
+        title = None
+        if soup.title and soup.title.text:
+            title = soup.title.text.strip()
+        elif soup.find("h1"):
+            title = soup.find("h1").get_text(strip=True)
 
-        offers: List[ProductOffer] = []
-        for card in cards:
-            offer = self._parse_card(card, part_query)
-            if offer is not None:
-                offers.append(offer)
-        return offers
+        price_raw = self._extract_price_raw(norm)
+        parsed = parse_price(price_raw) if price_raw else parse_price(None)
 
-    # -- per-card parsing ----------------------------------------------------
-    def _parse_card(self, card: Tag, part_query: str) -> Optional[ProductOffer]:
-        title = self._extract_title(card)
-        url = self._extract_url(card)
-        price_text = self._extract_price_text(card)
-        avail_text = self._extract_availability_text(card)
-        image = self._extract_image(card)
+        stock_qty, in_stock, avail_raw = self._extract_stock(norm)
 
-        parsed = parse_price(price_text)
-        in_stock = detect_availability(avail_text) if avail_text else None
-        if in_stock is None:
-            # A visible price with no explicit stock badge usually means buyable.
-            in_stock = True if parsed.amount is not None else None
+        package = self._first_line(_PACKAGE_RE, norm)
+        part_type = self._extract_part_type(norm)
 
-        # Drop pure noise (no title, no price, no link).
-        if not title and parsed.amount is None and not url:
+        image = self._extract_image(soup)
+
+        # Skip pages with neither a price nor a stock signal — not a real offer.
+        if parsed.amount is None and in_stock is None:
             return None
 
         return ProductOffer(
@@ -171,51 +93,70 @@ class JavanElectronicCrawler(BaseVendorCrawler):
             image_url=image,
             price_amount=parsed.amount,
             price_currency=parsed.currency,
-            price_raw=parsed.raw or None,
+            price_raw=price_raw,
             price_rial=parsed.to_rial(),
             in_stock=in_stock,
-            availability_raw=(avail_text or None),
+            stock_qty=stock_qty,
+            availability_raw=avail_raw,
+            package=package,
+            part_type=part_type,
         )
 
-    def _extract_title(self, card: Tag) -> Optional[str]:
-        node = _first_match(card, SELECTORS["title"])
-        if node is not None:
-            text = node.get("title") or node.get_text(strip=True)
-            if text:
-                return normalize_digits(text).strip()
-        # Fallback: the longest anchor text in the card.
-        anchors = [a.get_text(strip=True) for a in card.find_all("a")]
-        anchors = [a for a in anchors if a]
-        return max(anchors, key=len) if anchors else None
-
-    def _extract_url(self, card: Tag) -> Optional[str]:
-        node = _first_match(card, SELECTORS["link"])
-        href = node.get("href") if isinstance(node, Tag) else None
-        if not href:
-            a = card.find("a", href=True)
-            href = a["href"] if a else None
-        return urljoin(self.base_url, href) if href else None
-
-    def _extract_price_text(self, card: Tag) -> Optional[str]:
-        node = _first_match(card, SELECTORS["price"])
-        if node is not None and _looks_like_price(node.get_text()):
-            return node.get_text(" ", strip=True)
-        # Fallback: any descendant text that looks like a price.
-        for s in card.find_all(string=lambda t: bool(t) and _looks_like_price(t)):
-            return s.strip()
+    # -- helpers -------------------------------------------------------------
+    @staticmethod
+    def _extract_price_raw(norm_text: str) -> Optional[str]:
+        # Prefer the last Toman-anchored number (final/discounted price usually
+        # appears last on the page), then Rial, then a big-number fallback.
+        toman = _PRICE_TOMAN_RE.findall(norm_text)
+        if toman:
+            return f"{toman[-1]} تومان"
+        rial = _PRICE_RIAL_RE.findall(norm_text)
+        if rial:
+            return f"{rial[-1]} ریال"
+        big = _BIG_NUMBER_RE.findall(norm_text)
+        if big:
+            # No currency word -> this shop prices in Toman; label it so.
+            return f"{big[-1]} تومان"
         return None
 
-    def _extract_availability_text(self, card: Tag) -> Optional[str]:
-        node = _first_match(card, SELECTORS["availability"])
-        if node is not None:
-            text = node.get_text(" ", strip=True)
-            if text:
-                return text
-        return None
+    @staticmethod
+    def _extract_stock(norm_text: str):
+        m = _STOCK_RE.search(norm_text)
+        if m:
+            qty = int(m.group(1).replace(",", ""))
+            return qty, qty > 0, m.group(0)
+        m2 = _OUT_OF_STOCK_RE.search(norm_text)
+        if m2:
+            return None, False, m2.group(0)
+        return None, None, None
 
-    def _extract_image(self, card: Tag) -> Optional[str]:
-        img = card.find("img")
-        if img is None:
+    @staticmethod
+    def _first_line(pattern: re.Pattern, norm_text: str) -> Optional[str]:
+        m = pattern.search(norm_text)
+        if not m:
             return None
-        src = img.get("data-src") or img.get("src")
-        return urljoin(self.base_url, src) if src else None
+        # Capture only up to the end of the line.
+        value = m.group(1).splitlines()[0].strip()
+        return value or None
+
+    def _extract_part_type(self, norm_text: str) -> Optional[str]:
+        raw = self._first_line(_PART_TYPE_RE, norm_text)
+        if raw is None:
+            return None
+        if "کپی" in raw:
+            return "Copy"
+        if "بازسازی" in raw:
+            return "Refurbished"
+        return raw or "Original"
+
+    def _extract_image(self, soup: BeautifulSoup) -> Optional[str]:
+        # Prefer the OpenGraph image, else the first content image.
+        og = soup.find("meta", attrs={"property": "og:image"})
+        if og and og.get("content"):
+            return urljoin(self.base_url, og["content"])
+        img = soup.find("img")
+        if img is not None:
+            src = img.get("data-src") or img.get("src")
+            if src:
+                return urljoin(self.base_url, src)
+        return None
