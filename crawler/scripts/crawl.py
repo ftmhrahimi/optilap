@@ -6,16 +6,19 @@ Examples
 Crawl a single part and list every offer:
     python scripts/crawl.py --vendor JavanElectronic --part ATMEGA16A
 
-Crawl every unique part in a BOM and write JSON:
-    python scripts/crawl.py --bom fixtures/bom_sample.xlsx --out results.json
+Crawl a BOM and write BOTH results.json and results.csv:
+    python scripts/crawl.py --bom fixtures/bom_sample.xlsx --out results
 
-Show only the single best offer per part (old compact view):
+Write only one format (by extension), or exact paths:
+    python scripts/crawl.py --part LM358 --out offers.csv
+    python scripts/crawl.py --part LM358 --json a.json --csv b.csv
+
+Show only the single best offer per part (compact view):
     python scripts/crawl.py --part LM358 --best
 """
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import List
@@ -33,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from optilap_crawler import CrawlerConfig, FailureMonitor, crawl_parts  # noqa: E402
 from optilap_crawler.bom import read_bom, unique_parts  # noqa: E402
+from optilap_crawler.export import write_csv, write_json  # noqa: E402
 from optilap_crawler.models import CrawlResult, ProductOffer  # noqa: E402
 
 # Columns shown for every offer (in order).
@@ -125,8 +129,32 @@ def _parse_args(argv=None):
                    help="Show only the single best offer per part")
     p.add_argument("--browser", action="store_true",
                    help="Use the Playwright fetcher instead of requests")
-    p.add_argument("--out", help="Write full results (all offers) as JSON to this path")
+    p.add_argument("--out",
+                   help="Base output path. '.json'/'.csv' extension writes that "
+                        "one format; no extension writes BOTH <out>.json and <out>.csv")
+    p.add_argument("--json", dest="json_path", help="Write JSON to this exact path")
+    p.add_argument("--csv", dest="csv_path", help="Write CSV to this exact path")
     return p.parse_args(argv)
+
+
+def _write_outputs(results, args) -> List[str]:
+    """Resolve --out / --json / --csv into actual files. Returns paths written."""
+    written: List[str] = []
+    if args.out:
+        low = args.out.lower()
+        if low.endswith(".json"):
+            write_json(results, args.out); written.append(args.out)
+        elif low.endswith(".csv"):
+            write_csv(results, args.out); written.append(args.out)
+        else:  # no known extension -> emit both
+            j, c = args.out + ".json", args.out + ".csv"
+            write_json(results, j); write_csv(results, c)
+            written += [j, c]
+    if args.json_path:
+        write_json(results, args.json_path); written.append(args.json_path)
+    if args.csv_path:
+        write_csv(results, args.csv_path); written.append(args.csv_path)
+    return written
 
 
 def main(argv=None) -> int:
@@ -147,12 +175,8 @@ def main(argv=None) -> int:
 
     _report(results, best_only=args.best)
 
-    if args.out:
-        payload = [json.loads(r.model_dump_json()) for r in results]
-        Path(args.out).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        print(f"\nWrote {args.out}", file=sys.stderr)
+    for path in _write_outputs(results, args):
+        print(f"Wrote {path}", file=sys.stderr)
 
     # Non-zero exit only if every crawl errored (useful in CI/monitoring).
     return 1 if results and all(r.status.value == "error" for r in results) else 0
