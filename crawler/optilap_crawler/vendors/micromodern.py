@@ -1,19 +1,21 @@
 """Crawler for MicroModern — https://www.micmodshop.ir  (Tehran).
 
-Platform: **WordPress + WooCommerce** (PHP), server-rendered.
-Search: https://micmodshop.ir/?q=[PART_NAME]&post_type=product
+Platform: **WordPress + WooCommerce** (PHP), but with a customized theme.
+Search: https://micmodshop.ir/?s=[PART_NAME]&post_type=product
 
-WooCommerce conventions used here:
-  * search results = ``ul.products li.product`` cards, each with
-    ``a.woocommerce-LoopProduct-link`` (or the title link) to the product page;
-  * product page price = ``.summary .price`` (prefer ``ins`` = sale price);
-    availability = ``.stock`` (class ``in-stock`` / ``out-of-stock``);
-  * package/type live in the attributes table
-    (``.woocommerce-product-attributes``), handled by the shared extractor.
+⚠️ CALIBRATION STILL NEEDED. The vendor sheet's ``?q=`` URL returns a
+JavaScript search *modal* (autocomplete), whose server HTML contains only site
+chrome + "popular searches" links (``?...&custom_tags=popular_*``) — NOT a
+product listing. We therefore:
+  * use the standard WordPress results URL ``?s=...&post_type=product`` instead
+    of the AJAX ``?q=``;
+  * discover product links strictly by the ``/product/`` path, so the
+    "popular searches" navigation links can never be mistaken for products.
 
-⚠️ The search param is ``?q=`` (not WooCommerce's default ``?s=``), so the site
-likely uses a custom search plugin — verify results with
-``scripts/inspect_site.py --vendor MicroModern --part LM358``.
+The real results page uses a custom comparison-table theme, so the price/stock
+selectors below are placeholders. Run
+``scripts/inspect_site.py --vendor MicroModern --part LM358 --save`` on a machine
+that can reach the site and share the saved HTML to finalize the selectors.
 """
 from __future__ import annotations
 
@@ -38,7 +40,9 @@ _LINK_SELECTORS = (
     "h2 a",
     "a.product-loop-title",
 )
-_URL_MARKERS = ("/product/", "/shop/", "post_type=product")
+# Strictly real product pages — NOT "?post_type=product" (that also matches the
+# site's "popular searches" navigation links, which caused garbage results).
+_URL_MARKERS = ("/product/",)
 
 _PRICE_SELECTORS = (
     ".summary .price ins .woocommerce-Price-amount",  # sale price first
@@ -60,7 +64,7 @@ _STOCK_SELECTORS = (
 class MicroModernCrawler(BaseVendorCrawler):
     vendor_name = "MicroModern"
     base_url = "https://www.micmodshop.ir"
-    search_pattern = "https://micmodshop.ir/?q=[PART_NAME]&post_type=product"
+    search_pattern = "https://micmodshop.ir/?s=[PART_NAME]&post_type=product"
 
     def find_product_urls(self, search_html: str) -> List[str]:
         soup = BeautifulSoup(search_html, "html.parser")
