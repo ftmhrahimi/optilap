@@ -86,8 +86,11 @@ python scripts/crawl.py --vendor JavanElectronic --part LM358
 python scripts/crawl.py --vendor ECA --part LM358
 python scripts/crawl.py --vendor MicroModern --part LM358
 
-# a whole BOM -> JSON (first 5 parts while testing)
-python scripts/crawl.py --vendor ECA --bom fixtures/bom_sample.xlsx --limit 5 --out results.json
+# a whole BOM -> BOTH results.json and results.csv
+python scripts/crawl.py --vendor ECA --bom fixtures/bom_sample.xlsx --out results
+# one format only (by extension), or exact paths:
+python scripts/crawl.py --part LM358 --out offers.csv
+python scripts/crawl.py --part LM358 --json a.json --csv b.csv
 
 # calibrate/debug a vendor: shows search links + first product parse
 python scripts/inspect_site.py --vendor ECA --part LM358
@@ -102,7 +105,7 @@ print(r.status, len(r.offers), r.best_offer())
 ## Test
 
 ```bash
-python -m pytest -q      # 21 tests, no network required
+python -m pytest -q      # 23 tests, no network required
 ```
 
 ## Adding the next vendor
