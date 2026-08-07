@@ -30,7 +30,9 @@ def test_write_json_roundtrip(tmp_path):
     assert data[0]["offers"][0]["price_rial"] == "125000"  # Decimal serialized
 
 
-def test_write_csv_flat_with_bom(tmp_path):
+def test_write_csv_columns_match_json_offer_fields(tmp_path):
+    from optilap_crawler.models import ProductOffer
+
     path = tmp_path / "r.csv"
     write_csv(_sample_results(), str(path))
 
@@ -39,15 +41,16 @@ def test_write_csv_flat_with_bom(tmp_path):
 
     with open(path, encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
-    assert list(rows[0].keys()) == CSV_COLUMNS
-    # One offer row + one "no offers" row.
-    assert len(rows) == 2
+
+    # Columns are exactly the JSON offer object's fields.
+    assert list(rows[0].keys()) == list(ProductOffer.model_fields.keys())
+    assert CSV_COLUMNS == list(ProductOffer.model_fields.keys())
+    # One row per extracted offer; the zero-results part contributes no row.
+    assert len(rows) == 1
     assert rows[0]["part_query"] == "LM358"
     assert rows[0]["vendor"] == "JavanElectronic"
+    assert rows[0]["title"] == "آی‌سی LM358"
     assert rows[0]["price_rial"] == "125000"
     assert rows[0]["stock_qty"] == "42"
     assert rows[0]["package"] == "SO-8"
-    # The zero-results part still appears, with its status and blank offer fields.
-    assert rows[1]["part_query"] == "NOPART"
-    assert rows[1]["status"] == "zero_results"
-    assert rows[1]["vendor"] == ""
+    assert rows[0]["part_type"] == "Original"
