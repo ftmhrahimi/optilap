@@ -23,11 +23,16 @@ _PRICE_RIAL_RE = re.compile(r"([\d,][\d,]*)\s*(?:ریال|﷼)")
 _BIG_NUMBER_RE = re.compile(r"\d[\d,]{4,}")
 
 _STOCK_QTY_RE = re.compile(
-    r"(?:موجود در انبار|موجودی)\s*[:：]?\s*([\d,]+)"      # "موجود در انبار 42"
-    r"|([\d,]+)\s*(?:عدد|in stock)"                        # "12 عدد" / "12 in stock"
+    r"(?:موجود در انبار|موجودی)\s*[:：]?\s*([\d,]+)"        # "موجود در انبار 42"
+    r"|([\d,]+)\s*عدد\s*(?:در انبار|موجود)"                  # "35 عدد در انبار"
+    r"|([\d,]+)\s*in stock"                                  # "12 in stock"
 )
-_OUT_OF_STOCK_RE = re.compile(r"ناموجود|اتمام موجودی|اتمام موجودي|تمام شد|out of stock")
-_IN_STOCK_RE = re.compile(r"موجود|افزودن به سبد|in stock|add to cart")
+# Note: a bare "N عدد" is NOT a stock signal — it also appears in packaging info
+# (e.g. "بسته‌بندی: Tube-50 عدد"). Quantity requires an "انبار/موجود/stock" context.
+_OUT_OF_STOCK_RE = re.compile(
+    r"ناموجود|ناموجود|اتمام موجودی|اتمام موجودي|تمام شد|موجود نیست|سفارش\s*دهید|out of stock"
+)
+_IN_STOCK_RE = re.compile(r"موجود در انبار|افزودن به سبد|in stock|add to cart")
 
 _PACKAGE_LABELS = ("پکیج", "بسته بندی", "پکینگ", "package", "case")
 _TYPE_LABELS = ("نوع قطعه", "نوع کالا", "type")
@@ -149,13 +154,20 @@ def find_price(soup: BeautifulSoup, selectors: Sequence[str], norm_text: str):
 def find_stock(
     soup: BeautifulSoup, selectors: Sequence[str], norm_text: str
 ) -> Tuple[Optional[int], Optional[bool], Optional[str]]:
-    """Return (quantity, in_stock, raw_text). Out-of-stock is checked before
-    in-stock because "ناموجود" contains "موجود"."""
-    m = _STOCK_QTY_RE.search(norm_text)
-    if m:
-        digits = m.group(1) or m.group(2)
+    """Return (quantity, in_stock, raw_text).
+
+    Out-of-stock is decided FIRST: an out-of-stock page never shows
+    "موجود در انبار N", but may contain "N عدد" inside packaging text that must
+    not be mistaken for a stock quantity.
+    """
+    m_out = _OUT_OF_STOCK_RE.search(norm_text)
+    m_qty = _STOCK_QTY_RE.search(norm_text)
+    if m_out and not m_qty:
+        return None, False, m_out.group(0).strip()
+    if m_qty:
+        digits = m_qty.group(1) or m_qty.group(2) or m_qty.group(3)
         qty = int(digits.replace(",", ""))
-        return qty, qty > 0, m.group(0).strip()
+        return qty, qty > 0, m_qty.group(0).strip()
 
     for sel in selectors:
         el = first_in(soup, [sel])
@@ -169,8 +181,8 @@ def find_stock(
             qm = re.search(r"(\d+)", txt)
             return (int(qm.group(1)) if qm else None), True, txt or "in stock"
 
-    if _OUT_OF_STOCK_RE.search(norm_text):
-        return None, False, "out of stock"
+    if m_out:
+        return None, False, m_out.group(0).strip()
     if _IN_STOCK_RE.search(norm_text):
         return None, True, "in stock"
     return None, None, None

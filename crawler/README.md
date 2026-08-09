@@ -11,7 +11,7 @@ to feed the `referencePriceList` and the Scoring Engine.
 | --- | --- | --- | --- |
 | **JavanElectronic** | custom ASP.NET Core | `…/shop?searchfilter=` | verified against live site |
 | **ECA** | PrestaShop | `…/search?controller=search&s=` | selectors from standard PrestaShop — **needs live calibration** |
-| **MicroModern** | WooCommerce / WordPress | `…/?q=…&post_type=product` | selectors from standard WooCommerce — **needs live calibration** |
+| **MicroModern** | Next.js (React) | `…/?q=…&post_type=product` | verified — reads product JSON embedded in the page |
 
 All three share one extraction engine (`extract.py`) for the Persian price /
 stock / package / type text; each vendor file only declares its platform's CSS
@@ -60,9 +60,9 @@ optilap_crawler/
   extract.py     # shared parsing: links, price, stock, package, type, build_offer
   base.py        # two-stage crawl orchestration, retry, FailureMonitor
   vendors/
-    javanelec.py    # custom ASP.NET Core
-    eca.py          # PrestaShop
-    micromodern.py  # WooCommerce / WordPress
+    javanelec.py    # custom ASP.NET Core (2-stage HTML)
+    eca.py          # PrestaShop (2-stage HTML)
+    micromodern.py  # Next.js — reads embedded product JSON (single-stage)
   registry.py    # fixed vendor list
   bom.py         # read part numbers + quantities from a BOM .xlsx
 scripts/

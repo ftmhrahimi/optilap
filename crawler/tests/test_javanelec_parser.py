@@ -65,6 +65,21 @@ def test_parse_product_out_of_stock_copy():
     assert offer.price_amount == Decimal("9500")
 
 
+def test_out_of_stock_order_only_ignores_packaging_quantity():
+    # Real case (LM358AN): "ناموجود-سفارش دهید", no price, packaging "Tube-50 عدد".
+    # Must be out of stock, and the "50 عدد" packaging must NOT become stock_qty.
+    offer = _crawler().parse_product(
+        _fixture("javan_product_orderonly.html"),
+        "https://www.javanelec.com/shop/product/25145/national-semiconductor/lm358an",
+        "LM358",
+    )
+    assert offer is not None
+    assert offer.in_stock is False
+    assert offer.stock_qty is None
+    assert offer.price_amount is None
+    assert offer.package == "DIP-8"
+
+
 def test_parse_product_skips_page_with_no_price_or_stock():
     html = "<html><head><title>x</title></head><body><p>بدون اطلاعات</p></body></html>"
     offer = _crawler().parse_product(html, "http://x", "LM358")
