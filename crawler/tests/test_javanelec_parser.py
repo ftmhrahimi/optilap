@@ -15,6 +15,51 @@ def _crawler():
     return JavanElectronicCrawler()
 
 
+class _FakeFetcher:
+    def __init__(self, html):
+        self.html = html
+
+    def get_html(self, url):
+        return self.html
+
+
+# -- Single-stage: parse the search-result cards ----------------------------
+def test_parse_search_cards_all_states():
+    from optilap_crawler import crawl_part
+
+    result = crawl_part(
+        "JavanElectronic", "LM358",
+        fetcher=_FakeFetcher(_fixture("javan_search_cards.html")),
+    )
+    assert result.status.value == "ok"
+    assert len(result.offers) == 3
+    a, b, c = result.offers
+
+    # In-stock card: price is the CARD price in Rial (matches the site exactly).
+    assert a.title == "LM358D"
+    assert a.package == "SO-8"
+    assert a.part_type == "Original"          # data-prdtype=Original
+    assert a.price_amount == Decimal("113000")
+    assert a.price_currency == "IRR"
+    assert a.price_rial == Decimal("113000")
+    assert a.in_stock is True
+    assert a.availability == "in_stock"
+    assert a.product_url.endswith("/shop/product/18299/stmicroelectronics/lm358d")
+
+    # Out of stock, 31-day delivery, Copy.
+    assert b.title == "LM358N"
+    assert b.part_type == "Copy"              # data-prdtype=Copy
+    assert b.price_amount is None
+    assert b.availability == "out_of_stock"
+    assert b.lead_time_days == 31
+
+    # On order (being supplied), Renew -> Refurbished.
+    assert c.title == "LM358P"
+    assert c.part_type == "Refurbished"       # data-prdtype=Renew
+    assert c.availability == "on_order"
+    assert c.in_stock is False
+
+
 # -- Stage 1: search page -> product URLs -----------------------------------
 def test_find_product_urls_dedupes_and_absolutizes():
     urls = _crawler().find_product_urls(_fixture("javan_search.html"))

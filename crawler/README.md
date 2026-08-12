@@ -9,7 +9,7 @@ to feed the `referencePriceList` and the Scoring Engine.
 
 | Vendor | Platform | Search | Status |
 | --- | --- | --- | --- |
-| **JavanElectronic** | custom ASP.NET Core | `…/shop?searchfilter=` | verified against live site |
+| **JavanElectronic** | custom ASP.NET Core | `…/shop?searchfilter=` | verified — single-stage, reads price/stock/type/lead-time from the result cards |
 | **ECA** | PrestaShop | `…/search?controller=search&s=` | selectors from standard PrestaShop — **needs live calibration** |
 | **MicroModern** | Next.js (React) | `…/?q=…&post_type=product` | verified — reads product JSON embedded in the page |
 
@@ -102,7 +102,7 @@ print(r.status, len(r.offers), r.best_offer())
 ## Test
 
 ```bash
-python -m pytest -q      # 24 tests, no network required
+python -m pytest -q      # 25 tests, no network required
 ```
 
 ## Adding the next vendor
