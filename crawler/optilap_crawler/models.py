@@ -53,7 +53,14 @@ class ProductOffer(BaseModel):
 
     # Availability as shown on the page.
     in_stock: Optional[bool] = None
+    availability: Optional[str] = Field(
+        None,
+        description="Normalized state: 'in_stock' / 'out_of_stock' / 'on_order' (being supplied)",
+    )
     stock_qty: Optional[int] = Field(None, description="Units in stock if the page states it")
+    lead_time_days: Optional[int] = Field(
+        None, description="Days until delivery/supply for a back-ordered or on-order item"
+    )
     availability_raw: Optional[str] = None
 
     # Extra attributes useful for BOM matching / scoring later.

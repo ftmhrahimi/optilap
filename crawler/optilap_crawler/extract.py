@@ -30,12 +30,15 @@ _STOCK_QTY_RE = re.compile(
 # Note: a bare "N عدد" is NOT a stock signal — it also appears in packaging info
 # (e.g. "بسته‌بندی: Tube-50 عدد"). Quantity requires an "انبار/موجود/stock" context.
 _OUT_OF_STOCK_RE = re.compile(
-    r"ناموجود|ناموجود|اتمام موجودی|اتمام موجودي|تمام شد|موجود نیست|سفارش\s*دهید|out of stock"
+    r"ناموجود|اتمام موجودی|اتمام موجودي|تمام شد|موجود نیست|out of stock"
 )
-_IN_STOCK_RE = re.compile(r"موجود در انبار|افزودن به سبد|in stock|add to cart")
+# "Being supplied / pre-order" is a DISTINCT state from plain out-of-stock.
+_ON_ORDER_RE = re.compile(r"در حال تامین|در حال تأمین|پیش\s*خرید")
+# Lead time, e.g. "تحویل ۳۵ روزه" -> 35 days.
+_LEAD_TIME_RE = re.compile(r"تحویل\s*([\d,]+)\s*روزه")
+_IN_STOCK_RE = re.compile(r"موجود در انبار|in stock|add to cart")
 
 _PACKAGE_LABELS = ("پکیج", "بسته بندی", "پکینگ", "package", "case")
-_TYPE_LABELS = ("نوع قطعه", "نوع کالا", "type")
 
 # unit words that confirm a text chunk is a price
 _PRICE_UNITS = ("تومان", "ریال", "﷼")
@@ -151,23 +154,57 @@ def find_price(soup: BeautifulSoup, selectors: Sequence[str], norm_text: str):
     return parse_price(price_raw_from_text(norm_text))
 
 
-def find_stock(
-    soup: BeautifulSoup, selectors: Sequence[str], norm_text: str
-) -> Tuple[Optional[int], Optional[bool], Optional[str]]:
-    """Return (quantity, in_stock, raw_text).
+class StockInfo:
+    """Availability details extracted from a product page."""
 
-    Out-of-stock is decided FIRST: an out-of-stock page never shows
-    "موجود در انبار N", but may contain "N عدد" inside packaging text that must
-    not be mistaken for a stock quantity.
+    __slots__ = ("qty", "in_stock", "availability", "lead_time_days", "raw")
+
+    def __init__(self, qty=None, in_stock=None, availability=None, lead_time_days=None, raw=None):
+        self.qty = qty
+        self.in_stock = in_stock
+        self.availability = availability  # 'in_stock' / 'out_of_stock' / 'on_order'
+        self.lead_time_days = lead_time_days
+        self.raw = raw
+
+
+def _line_with(norm_text: str, pattern: "re.Pattern") -> Optional[str]:
+    for line in norm_text.splitlines():
+        if pattern.search(line):
+            s = line.strip()
+            if s:
+                return s
+    return None
+
+
+def find_stock(soup: BeautifulSoup, selectors: Sequence[str], norm_text: str) -> StockInfo:
+    """Classify availability into in_stock / out_of_stock / on_order (+ lead time).
+
+    Order matters:
+      * a "N عدد" packaging count is NOT stock, so quantity requires an
+        "انبار/موجود/stock" context;
+      * "در حال تامین / پیش‌خرید" (being supplied) is distinct from plain
+        "ناموجود" (out of stock) and is checked first;
+      * "تحویل N روزه" gives the lead time for back-ordered items.
     """
-    m_out = _OUT_OF_STOCK_RE.search(norm_text)
+    lead = None
+    ml = _LEAD_TIME_RE.search(norm_text)
+    if ml:
+        try:
+            lead = int(ml.group(1).replace(",", ""))
+        except ValueError:
+            lead = None
+
+    if _ON_ORDER_RE.search(norm_text):
+        return StockInfo(None, False, "on_order", lead, _line_with(norm_text, _ON_ORDER_RE))
+    if _OUT_OF_STOCK_RE.search(norm_text):
+        return StockInfo(None, False, "out_of_stock", lead, _line_with(norm_text, _OUT_OF_STOCK_RE))
+
     m_qty = _STOCK_QTY_RE.search(norm_text)
-    if m_out and not m_qty:
-        return None, False, m_out.group(0).strip()
     if m_qty:
         digits = m_qty.group(1) or m_qty.group(2) or m_qty.group(3)
         qty = int(digits.replace(",", ""))
-        return qty, qty > 0, m_qty.group(0).strip()
+        return StockInfo(qty, qty > 0, "in_stock" if qty > 0 else "out_of_stock",
+                         None, m_qty.group(0).strip())
 
     for sel in selectors:
         el = first_in(soup, [sel])
@@ -176,16 +213,15 @@ def find_stock(
         classes = " ".join(el.get("class", []))
         txt = normalize_digits(el.get_text(" ", strip=True))
         if "out-of-stock" in classes or "unavailable" in classes or _OUT_OF_STOCK_RE.search(txt):
-            return None, False, txt or "out of stock"
+            return StockInfo(None, False, "out_of_stock", lead, txt or "out of stock")
         if "in-stock" in classes or "available" in classes or _IN_STOCK_RE.search(txt):
             qm = re.search(r"(\d+)", txt)
-            return (int(qm.group(1)) if qm else None), True, txt or "in stock"
+            qty = int(qm.group(1)) if qm else None
+            return StockInfo(qty, True, "in_stock", None, txt or "in stock")
 
-    if m_out:
-        return None, False, m_out.group(0).strip()
     if _IN_STOCK_RE.search(norm_text):
-        return None, True, "in stock"
-    return None, None, None
+        return StockInfo(None, True, "in_stock", None, "in stock")
+    return StockInfo(None, None, None, lead, None)
 
 
 def _labeled_value(norm_text: str, labels: Iterable[str]) -> Optional[str]:
@@ -220,17 +256,32 @@ def find_package(soup: BeautifulSoup, norm_text: str) -> Optional[str]:
     return _attribute_value(soup, _PACKAGE_LABELS) or _labeled_value(norm_text, _PACKAGE_LABELS)
 
 
-def find_part_type(soup: BeautifulSoup, norm_text: str) -> Optional[str]:
-    raw = _attribute_value(soup, _TYPE_LABELS) or _labeled_value(norm_text, _TYPE_LABELS)
-    if raw is None:
-        return None
-    if "کپی" in raw or "copy" in raw.lower():
-        return "Copy"
-    if "بازسازی" in raw or "refurb" in raw.lower():
+def find_part_type(soup: BeautifulSoup, norm_text: str, default: Optional[str] = None) -> Optional[str]:
+    """Detect Original / Copy / Refurbished.
+
+    Iranian shops flag non-genuine parts with a badge: "کپی" (copy) or
+    "بازسازی شده" (refurbished); genuine parts carry no badge. We deliberately do
+    NOT match a generic English "Type" label — on op-amps that is the amplifier
+    configuration ("Single/Dual"), not the part authenticity.
+    """
+    if "بازسازی" in norm_text:
         return "Refurbished"
-    if "اورجینال" in raw or "اصل" in raw or "original" in raw.lower():
+    if "کپی" in norm_text:
+        return "Copy"
+    if "اورجینال" in norm_text:
         return "Original"
-    return raw
+    # A Persian "نوع قطعه" field, if the shop uses one.
+    raw = _attribute_value(soup, ("نوع قطعه",)) or _labeled_value(norm_text, ("نوع قطعه",))
+    if raw:
+        low = raw.lower()
+        if "کپی" in raw or "copy" in low:
+            return "Copy"
+        if "بازسازی" in raw or "refurb" in low:
+            return "Refurbished"
+        if "اورجینال" in raw or "original" in low:
+            return "Original"
+        return raw
+    return default
 
 
 def find_image(soup: BeautifulSoup, base_url: str) -> Optional[str]:
@@ -253,11 +304,14 @@ def build_offer(
     html: str,
     price_selectors: Sequence[str],
     stock_selectors: Sequence[str],
+    default_part_type: Optional[str] = None,
 ):
     """Parse a product-detail page into a ProductOffer (or None to skip).
 
     Shared by every vendor whose product pages follow the Persian conventions;
     each vendor only passes its platform's price/stock CSS selectors.
+    ``default_part_type`` is used when no copy/refurb badge is present (e.g.
+    JavanElectronic treats un-badged parts as "Original").
     """
     from .models import ProductOffer  # local import to avoid a cycle
 
@@ -265,10 +319,10 @@ def build_offer(
     norm = text_of(soup)
 
     parsed = find_price(soup, price_selectors, norm)
-    qty, in_stock, avail_raw = find_stock(soup, stock_selectors, norm)
+    stock = find_stock(soup, stock_selectors, norm)
 
-    # A page with neither a price nor a stock signal isn't a real offer.
-    if parsed.amount is None and in_stock is None:
+    # A page with neither a price nor any availability signal isn't a real offer.
+    if parsed.amount is None and stock.in_stock is None and stock.availability is None:
         return None
 
     return ProductOffer(
@@ -281,9 +335,11 @@ def build_offer(
         price_currency=parsed.currency,
         price_raw=parsed.raw or None,
         price_rial=parsed.to_rial(),
-        in_stock=in_stock,
-        stock_qty=qty,
-        availability_raw=avail_raw,
+        in_stock=stock.in_stock,
+        availability=stock.availability,
+        stock_qty=stock.qty,
+        lead_time_days=stock.lead_time_days,
+        availability_raw=stock.raw,
         package=find_package(soup, norm),
-        part_type=find_part_type(soup, norm),
+        part_type=find_part_type(soup, norm, default=default_part_type),
     )

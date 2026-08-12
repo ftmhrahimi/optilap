@@ -49,4 +49,6 @@ class JavanElectronicCrawler(BaseVendorCrawler):
             html=html,
             price_selectors=_PRICE_SELECTORS,
             stock_selectors=_STOCK_SELECTORS,
+            # JavanElec flags copies/refurbs with a badge; un-badged = Original.
+            default_part_type="Original",
         )

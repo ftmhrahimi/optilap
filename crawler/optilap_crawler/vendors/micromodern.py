@@ -179,6 +179,11 @@ class MicroModernCrawler(BaseVendorCrawler):
         in_stock = p.get("is_available")
         if in_stock is None and qty is not None:
             in_stock = qty > 0
+        availability = None
+        if in_stock is True:
+            availability = "in_stock"
+        elif in_stock is False:
+            availability = "out_of_stock"
 
         attrs = p.get("attributes_dict") or {}
         package = _attr(attrs, "Package")
@@ -211,6 +216,7 @@ class MicroModernCrawler(BaseVendorCrawler):
             price_raw=(f"{int(price):,} تومان" if amount is not None else None),
             price_rial=(amount * 10 if amount is not None else None),
             in_stock=in_stock,
+            availability=availability,
             stock_qty=qty,
             availability_raw=("in stock" if in_stock else "out of stock" if in_stock is False else None),
             package=package,
