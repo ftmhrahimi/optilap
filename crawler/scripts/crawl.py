@@ -6,19 +6,16 @@ Examples
 Crawl a single part and list every offer:
     python scripts/crawl.py --vendor JavanElectronic --part ATMEGA16A
 
-Crawl a BOM and write BOTH results.json and results.csv:
-    python scripts/crawl.py --bom fixtures/bom_sample.xlsx --out results
+Crawl a whole BOM and write JSON:
+    python scripts/crawl.py --bom fixtures/bom_sample.xlsx --out results.json
 
-Write only one format (by extension), or exact paths:
-    python scripts/crawl.py --part LM358 --out offers.csv
-    python scripts/crawl.py --part LM358 --json a.json --csv b.csv
-
-Show only the single best offer per part (compact view):
+Show only the single best offer per part:
     python scripts/crawl.py --part LM358 --best
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import List
@@ -28,7 +25,7 @@ from typing import List
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-    except Exception:  # noqa: BLE001 - older Pythons / non-reconfigurable streams
+    except Exception:  # noqa: BLE001
         pass
 
 # Make the package importable when run directly from scripts/.
@@ -36,10 +33,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from optilap_crawler import CrawlerConfig, FailureMonitor, crawl_parts  # noqa: E402
 from optilap_crawler.bom import read_bom, unique_parts  # noqa: E402
-from optilap_crawler.export import write_csv, write_json  # noqa: E402
 from optilap_crawler.models import CrawlResult, ProductOffer  # noqa: E402
 
-# Columns shown for every offer (in order).
 _COLUMNS = ["Vendor", "Price", "Stock", "Package", "Type", "Time", "Title"]
 
 
@@ -51,47 +46,40 @@ def _fmt_price(o: ProductOffer) -> str:
 
 
 def _fmt_stock(o: ProductOffer) -> str:
-    if o.stock_qty is not None:
+    lead = f" (deliver {o.lead_time_days}d)" if o.lead_time_days else ""
+    if o.availability == "on_order":
+        return f"on order{lead or ''}"
+    # Out of stock covers explicit False, the normalized state, and qty 0.
+    if o.in_stock is False or o.availability == "out_of_stock" or o.stock_qty == 0:
+        return f"out of stock{lead}"
+    if o.stock_qty and o.stock_qty > 0:
         return f"{o.stock_qty} in stock"
     if o.in_stock is True:
         return "in stock"
-    if o.in_stock is False:
-        return "out of stock"
     return "unknown"
 
 
 def _fmt_time(o: ProductOffer) -> str:
-    # crawled_at is timezone-aware UTC; show it in the machine's local time.
     return o.crawled_at.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 def _offer_row(o: ProductOffer) -> List[str]:
-    return [
-        o.vendor,
-        _fmt_price(o),
-        _fmt_stock(o),
-        o.package or "-",
-        o.part_type or "-",
-        _fmt_time(o),
-        (o.title or "-"),
-    ]
+    return [o.vendor, _fmt_price(o), _fmt_stock(o), o.package or "-",
+            o.part_type or "-", _fmt_time(o), (o.title or "-")]
 
 
 def _print_table(rows: List[List[str]]) -> None:
-    """Print a simple left-aligned table. Title is last so RTL text can't
-    break the alignment of the numeric columns before it."""
     header = _COLUMNS
-    # Width per column based on ASCII-ish content (title excluded from padding).
     widths = [len(h) for h in header]
     for r in rows:
-        for i, cell in enumerate(r[:-1]):  # skip Title for width calc
+        for i, cell in enumerate(r[:-1]):  # Title (last) excluded from padding
             widths[i] = max(widths[i], len(cell))
 
     def line(cells: List[str]) -> str:
-        out = []
-        for i, cell in enumerate(cells):
-            out.append(cell if i == len(cells) - 1 else cell.ljust(widths[i]))
-        return "  ".join(out)
+        return "  ".join(
+            cell if i == len(cells) - 1 else cell.ljust(widths[i])
+            for i, cell in enumerate(cells)
+        )
 
     print(line(header))
     print(line(["-" * w for w in widths[:-1]] + ["-" * len("Title")]))
@@ -110,7 +98,6 @@ def _report(results: List[CrawlResult], best_only: bool) -> None:
             best = r.best_offer()
             offers = [best] if best else []
         _print_table([_offer_row(o) for o in offers])
-        # Product URLs printed separately (too long for a table column).
         for i, o in enumerate(offers, 1):
             if o.product_url:
                 print(f"    ({i}) {o.product_url}")
@@ -129,32 +116,8 @@ def _parse_args(argv=None):
                    help="Show only the single best offer per part")
     p.add_argument("--browser", action="store_true",
                    help="Use the Playwright fetcher instead of requests")
-    p.add_argument("--out",
-                   help="Base output path. '.json'/'.csv' extension writes that "
-                        "one format; no extension writes BOTH <out>.json and <out>.csv")
-    p.add_argument("--json", dest="json_path", help="Write JSON to this exact path")
-    p.add_argument("--csv", dest="csv_path", help="Write CSV to this exact path")
+    p.add_argument("--out", help="Write full results (all offers) as JSON to this path")
     return p.parse_args(argv)
-
-
-def _write_outputs(results, args) -> List[str]:
-    """Resolve --out / --json / --csv into actual files. Returns paths written."""
-    written: List[str] = []
-    if args.out:
-        low = args.out.lower()
-        if low.endswith(".json"):
-            write_json(results, args.out); written.append(args.out)
-        elif low.endswith(".csv"):
-            write_csv(results, args.out); written.append(args.out)
-        else:  # no known extension -> emit both
-            j, c = args.out + ".json", args.out + ".csv"
-            write_json(results, j); write_csv(results, c)
-            written += [j, c]
-    if args.json_path:
-        write_json(results, args.json_path); written.append(args.json_path)
-    if args.csv_path:
-        write_csv(results, args.csv_path); written.append(args.csv_path)
-    return written
 
 
 def main(argv=None) -> int:
@@ -175,10 +138,13 @@ def main(argv=None) -> int:
 
     _report(results, best_only=args.best)
 
-    for path in _write_outputs(results, args):
-        print(f"Wrote {path}", file=sys.stderr)
+    if args.out:
+        payload = [json.loads(r.model_dump_json()) for r in results]
+        Path(args.out).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"\nWrote {args.out}", file=sys.stderr)
 
-    # Non-zero exit only if every crawl errored (useful in CI/monitoring).
     return 1 if results and all(r.status.value == "error" for r in results) else 0
 
 

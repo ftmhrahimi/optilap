@@ -46,6 +46,7 @@ def test_parse_product_in_stock():
     assert offer.price_currency == "IRT"
     assert offer.price_rial == Decimal("125000")  # Toman -> Rial x10
     assert offer.in_stock is True
+    assert offer.availability == "in_stock"
     assert offer.stock_qty == 42          # Persian digits normalized
     assert offer.package == "SO-8"
     assert offer.part_type == "Original"  # اورجینال -> Original
@@ -78,6 +79,28 @@ def test_out_of_stock_order_only_ignores_packaging_quantity():
     assert offer.stock_qty is None
     assert offer.price_amount is None
     assert offer.package == "DIP-8"
+
+
+def test_on_order_is_distinct_from_out_of_stock():
+    # "در حال تامین - پیش خرید" is a separate state from plain "ناموجود".
+    offer = _crawler().parse_product(
+        _fixture("javan_product_onorder.html"), "http://x", "LM358")
+    assert offer is not None
+    assert offer.availability == "on_order"
+    assert offer.in_stock is False
+    assert offer.part_type == "Original"   # no copy/refurb badge -> default
+
+
+def test_back_order_keeps_lead_time_and_ignores_english_type_spec():
+    # "ناموجود-تحویل ۳۵ روزه": out of stock, 35-day delivery. The English
+    # "Type: Single|Dual" amplifier spec must NOT become the part type.
+    offer = _crawler().parse_product(
+        _fixture("javan_product_backorder.html"), "http://x", "LM358")
+    assert offer is not None
+    assert offer.availability == "out_of_stock"
+    assert offer.lead_time_days == 35
+    assert offer.package == "SO-8"
+    assert offer.part_type == "Original"   # NOT "Single|Dual"
 
 
 def test_parse_product_skips_page_with_no_price_or_stock():
