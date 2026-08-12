@@ -1,22 +1,28 @@
-<!-- SYNTHETIC PrestaShop (ECA) product-detail page, in stock. -->
+<!--
+  SYNTHETIC PrestaShop (ECA) product page, modeled on the REAL page, with the
+  traps that previously caused false positives:
+    * a <script> containing the string 'ناموجود' (must be ignored),
+    * a "کپی لینک" share button and a review mentioning "کپی" (must NOT set type),
+    * "نوع قطعه" is the functional category (آپ‌امپ), NOT authenticity.
+  Real availability lives in the .stock-badge-inline badge.
+-->
 <html lang="fa" dir="rtl">
   <head>
-    <title>LM358 | ای سی ای</title>
-    <meta property="og:image" content="/img/lm358-big.jpg" />
+    <title>تراشه آپ امپ LM358 پکیج DIP | ای سی ای</title>
+    <meta property="og:image" content="/img/lm358.jpg" />
   </head>
   <body>
-    <h1 class="product-name">آی‌سی LM358 اپ‌امپ</h1>
+    <h1 class="product-name">تراشه آپ امپ LM358 پکیج DIP</h1>
     <div class="product-prices">
-      <div class="current-price">
-        <span itemprop="price" content="85000">۸۵٬۰۰۰ تومان</span>
-      </div>
+      <div class="current-price"><span class="product-price">62,300 ریال</span></div>
     </div>
-    <div id="product-availability" class="product-availability">
-      <i class="material-icons"></i> موجود در انبار 27
-    </div>
+    <div class="stock-badge-inline stock-badge--in-cart">موجود در انبار</div>
+    <button class="btn-share"><span>کپی لینک</span></button>
     <dl class="data-sheet">
-      <dt class="name">پکیج</dt><dd class="value">DIP-8</dd>
-      <dt class="name">نوع قطعه</dt><dd class="value">اورجینال</dd>
+      <dt class="name">نوع قطعه</dt><dd class="value">آپ‌امپ (Operational Amplifier)</dd>
+      <dt class="name">پکیج</dt><dd class="value">DIP</dd>
     </dl>
+    <div class="reviews"><p>سلام، نسخه اصلی هست یا کپی؟</p></div>
+    <script>let priceFormat = (parseInt(n) === 0) ? 'ناموجود' : 'ok'; var s = 'کپی شد';</script>
   </body>
 </html>

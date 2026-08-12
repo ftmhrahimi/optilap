@@ -49,6 +49,8 @@ _PRICE_SELECTORS = (
     ".price",
 )
 _STOCK_SELECTORS = (
+    ".stock-badge-inline",   # ECA's actual in-stock/out-of-stock badge
+    ".stock-badge",
     "#product-availability",
     ".product-availability",
     ".product-quantities",
