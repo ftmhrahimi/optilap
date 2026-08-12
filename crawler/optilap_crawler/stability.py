@@ -151,7 +151,13 @@ class VendorSummary:
 
     @property
     def parse_ok_rate(self) -> Optional[float]:
-        """Fraction of reachable, non-blocked trials that produced offers."""
+        """Fraction of reachable, non-blocked trials that produced offers.
+
+        This is a **hit rate**, not a health score: a real BOM contains many
+        exact MPNs a given shop simply doesn't stock, so a value below 100% is
+        normal and does *not* by itself mean the parser/structure is broken.
+        Only an all-zero hit rate is treated as a (soft) warning below.
+        """
         usable = self.ok + self.zero
         return (self.ok / usable) if usable else None
 
@@ -187,9 +193,10 @@ class VendorSummary:
         if self.blocked or self.error:
             return "WARN"          # intermittent blocking / errors
         if self.parse_ok_rate == 0:
-            return "WARN"          # reachable but nothing parsed (selectors? no stock?)
-        if (self.parse_ok_rate or 0) < 1:
-            return "WARN"          # inconsistent parsing
+            return "WARN"          # reachable but nothing parsed on ANY part
+        # A partial hit rate (some parts absent from this shop) is expected on a
+        # real BOM and is NOT penalised — stability is about reachability +
+        # blocking + a working parser, not catalogue coverage.
         return "PASS"
 
     @property
@@ -207,10 +214,14 @@ class VendorSummary:
             bits.append(f"intermittent blocking ({self.blocked}/{self.trials}, e.g. {reason})")
         if self.error and self.error != self.trials:
             bits.append(f"{self.error}/{self.trials} errored")
+        usable = self.ok + self.zero
         if self.parse_ok_rate == 0:
-            bits.append("reachable but 0 offers parsed — check selectors or the test parts")
-        elif (self.parse_ok_rate or 0) < 1:
-            bits.append(f"parsed offers on {self.ok}/{self.ok + self.zero} usable trials")
+            bits.append("reachable but 0 offers parsed on any part — check selectors "
+                        "or that the parts are searchable at this shop")
+        elif usable:
+            rate = (self.parse_ok_rate or 0) * 100
+            bits.append(f"reachable & unblocked; offers found on {self.ok}/{usable} "
+                        f"searches ({rate:.0f}% hit rate)")
         if not bits:
             bits.append("stable: reachable, unblocked, structure parsed on every trial")
         return "; ".join(bits)

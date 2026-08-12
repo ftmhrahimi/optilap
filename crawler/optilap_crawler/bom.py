@@ -16,9 +16,13 @@ from openpyxl import load_workbook
 from .normalize import normalize_part_query
 
 # Substrings we accept (case-insensitive) when locating each column.
-_PART_HEADER_HINTS = ("part", "mpn", "comment", "قطعه", "کالا")
+_PART_HEADER_HINTS = ("part", "mpn", "p/n", "comment", "قطعه", "کالا")
 _QTY_HEADER_HINTS = ("qty", "quantity", "تعداد")
 _PKG_HEADER_HINTS = ("package", "footprint", "بسته")
+
+# Worksheet titles that are not BOMs (index / metadata / TOC sheets) — skipped
+# when reading a whole multi-sheet workbook.
+_SHEET_SKIP_HINTS = ("index", "metadata", "meta", "راهنما", "فهرست", "خلاصه")
 
 
 @dataclass
@@ -28,6 +32,7 @@ class BomLine:
     quantity: Optional[float] = None
     package: Optional[str] = None
     row: int = 0
+    sheet: str = ""      # worksheet the line came from (for multi-BOM workbooks)
 
 
 def _find_col(headers: List[str], hints) -> Optional[int]:
@@ -38,11 +43,8 @@ def _find_col(headers: List[str], hints) -> Optional[int]:
     return None
 
 
-def read_bom(path: str, sheet: Optional[str] = None) -> List[BomLine]:
-    """Parse a BOM workbook into ``BomLine`` records (blank part rows skipped)."""
-    wb = load_workbook(path, data_only=True, read_only=True)
-    ws = wb[sheet] if sheet else wb.worksheets[0]
-
+def _read_worksheet(ws, sheet_name: str = "") -> List[BomLine]:
+    """Parse one worksheet into ``BomLine`` records (blank part rows skipped)."""
     rows = ws.iter_rows(values_only=True)
     try:
         header = [str(c) if c is not None else "" for c in next(rows)]
@@ -78,10 +80,54 @@ def read_bom(path: str, sheet: Optional[str] = None) -> List[BomLine]:
                 quantity=quantity,
                 package=package,
                 row=i,
+                sheet=sheet_name,
             )
         )
-    wb.close()
     return lines
+
+
+def read_bom(path: str, sheet: Optional[str] = None) -> List[BomLine]:
+    """Parse a single BOM sheet into ``BomLine`` records."""
+    wb = load_workbook(path, data_only=True, read_only=True)
+    try:
+        ws = wb[sheet] if sheet else wb.worksheets[0]
+        return _read_worksheet(ws, ws.title)
+    finally:
+        wb.close()
+
+
+def read_all_sheets(
+    path: str,
+    sheets: Optional[List[str]] = None,
+    per_sheet: Optional[int] = None,
+) -> List[BomLine]:
+    """Parse every BOM sheet of a multi-sheet workbook.
+
+    ``sheets`` selects specific worksheet titles; otherwise all sheets are used
+    except index/metadata sheets (matched by :data:`_SHEET_SKIP_HINTS`).
+    ``per_sheet`` caps how many part-lines are taken from each sheet (useful to
+    sample every board without crawling thousands of parts). Each line records
+    its source ``sheet``.
+    """
+    wb = load_workbook(path, data_only=True, read_only=True)
+    try:
+        if sheets:
+            wanted = [str(s) for s in sheets]
+            names = [n for n in wb.sheetnames if n in wanted]
+        else:
+            names = [
+                n for n in wb.sheetnames
+                if not any(h in n.lower() for h in _SHEET_SKIP_HINTS)
+            ]
+        out: List[BomLine] = []
+        for name in names:
+            lines = _read_worksheet(wb[name], name)
+            if per_sheet:
+                lines = lines[:per_sheet]
+            out.extend(lines)
+        return out
+    finally:
+        wb.close()
 
 
 def unique_parts(lines: List[BomLine]) -> List[str]:

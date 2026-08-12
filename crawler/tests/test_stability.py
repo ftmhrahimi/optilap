@@ -123,6 +123,44 @@ def test_run_stability_all_vendors_parseable():
         assert s.verdict == "PASS"
 
 
+class _PartialHitFetcher:
+    """JavanElectronic cards for a known part, an empty page for anything else —
+    simulates a real BOM where a shop stocks only some of the MPNs."""
+
+    def __init__(self, vendor: str):
+        self._records: List[FetchRecord] = []
+
+    def get_html(self, url: str) -> str:
+        body = _fixture("javan_search_cards.html") if "LM358" in url else "<html></html>"
+        self._records.append(
+            FetchRecord(url=url, status_code=200, elapsed_ms=4, bytes=len(body),
+                        block_reason=None)
+        )
+        return body
+
+    def drain_records(self) -> List[FetchRecord]:
+        recs = self._records
+        self._records = []
+        return recs
+
+
+def test_partial_hit_rate_still_passes():
+    # One part hits, one legitimately returns nothing; unblocked and no errors.
+    trials = run_stability(
+        vendors=["JavanElectronic"],
+        parts=["LM358", "NOSUCHPART999"],
+        fetcher_factory=_PartialHitFetcher,
+        repeat=1,
+        delay_s=0,
+    )
+    s = summarize(trials)["JavanElectronic"]
+    assert s.ok == 1 and s.zero == 1
+    assert s.blocked == 0 and s.error == 0
+    assert s.parse_ok_rate == 0.5
+    # A shop simply not stocking every MPN is normal — not a stability failure.
+    assert s.verdict == "PASS"
+
+
 def test_run_stability_detects_blocking():
     trials = run_stability(
         vendors=["ECA"],
