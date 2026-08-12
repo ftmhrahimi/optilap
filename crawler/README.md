@@ -65,10 +65,12 @@ optilap_crawler/
     micromodern.py  # Next.js — reads embedded product JSON (single-stage)
   registry.py    # fixed vendor list
   bom.py         # read part numbers + quantities from a BOM .xlsx
+  stability.py   # stability-probe logic: block detection + per-vendor scoring
 scripts/
   crawl.py       # CLI: crawl a part or a whole BOM -> JSON
   inspect_site.py# debug/calibrate: dump search links + a parsed product page
-tests/           # pure parser/normalizer/BOM tests (no network)
+  stability_test.py # CLI: probe each vendor N times -> blocking / parseability report
+tests/           # pure parser/normalizer/BOM/stability tests (no network)
 fixtures/        # synthetic search/product HTML + the sample BOM
 ```
 
@@ -102,8 +104,39 @@ print(r.status, len(r.offers), r.best_offer())
 ## Test
 
 ```bash
-python -m pytest -q      # 25 tests, no network required
+python -m pytest -q      # 30 tests, no network required
 ```
+
+## Stability testing (do the sites block us? is the structure parseable?)
+
+`scripts/stability_test.py` probes each vendor several times and reports, per
+vendor: whether responses look **blocked** (hostile status code, or a Cloudflare
+/ ArvanCloud / reCAPTCHA / Persian "please wait" challenge body) and whether the
+real parser turns the page into **offers** (structure still parseable). Each
+`(vendor, part)` is hit `--repeat` times with a polite `--delay`, so intermittent
+blocking / rate-limiting shows up — not just one lucky hit.
+
+```bash
+# all 3 vendors, default parts (LM358, NE555, ATMEGA328), 3 trials each
+python scripts/stability_test.py
+
+# focus one vendor, more repetitions, write the full JSON report
+python scripts/stability_test.py --vendor ECA --parts LM358,NE555 --repeat 5 --out stability.json
+```
+
+Each vendor gets a **PASS / WARN / FAIL** verdict:
+
+| verdict | meaning |
+| --- | --- |
+| **PASS** | reachable, never blocked, structure parsed into offers on every trial |
+| **WARN** | intermittent blocking/errors, or reachable but offers parsed on only some trials |
+| **FAIL** | blocked on every request, or unreachable (all requests errored) |
+
+> Run it from a network that can reach the shops (e.g. locally). A restricted
+> CI/sandbox may block the shop domains at its own egress — that surfaces here as
+> every trial **erroring** with a connection failure (reported as *unreachable*,
+> distinct from the vendor *blocking* us). The block-detection and scoring logic
+> itself is covered offline by `tests/test_stability.py`.
 
 ## Adding the next vendor
 
