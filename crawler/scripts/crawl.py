@@ -39,10 +39,11 @@ _COLUMNS = ["Vendor", "Price", "Stock", "Package", "Type", "Time", "Title"]
 
 
 def _fmt_price(o: ProductOffer) -> str:
-    if o.price_amount is None:
+    # Always display the Rial-normalized price so every vendor is comparable
+    # (e.g. MicroModern's Toman prices are shown x10 in Rial).
+    if o.price_rial is None:
         return "no price"
-    unit = {"IRT": "Toman", "IRR": "Rial"}.get(o.price_currency or "", o.price_currency or "")
-    return f"{o.price_amount:,.0f} {unit}".strip()
+    return f"{o.price_rial:,.0f} Rial"
 
 
 def _fmt_stock(o: ProductOffer) -> str:
