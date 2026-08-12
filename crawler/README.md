@@ -124,6 +124,30 @@ python scripts/stability_test.py
 python scripts/stability_test.py --vendor ECA --parts LM358,NE555 --repeat 5 --out stability.json
 ```
 
+### Driving it from a real BOM workbook
+
+Point `--bom` at a multi-sheet BOM (index/metadata sheets are skipped
+automatically) to probe stability against **real** part numbers from every
+board. Because a full BOM can be hundreds of unique MPNs, `--per-sheet` samples
+a few parts from each sheet (so every board is represented) and `--limit` caps
+the total; in BOM mode `--repeat` defaults to 1.
+
+```bash
+# ~5 parts from each of the 20 sheets, all three vendors, JSON report
+python scripts/stability_test.py --bom Electronics_BOM_Samples_20_Boards_V1.0.xlsx \
+    --per-sheet 5 --out stability_bom.json
+
+# a full sweep of one board's every part against one vendor
+python scripts/stability_test.py --bom BOMs.xlsx --sheets 4 --per-sheet 0 --vendor ECA
+```
+
+> On a real BOM many exact MPNs won't be stocked by a given shop, so the **hit
+> rate** (parts that returned an offer) is naturally below 100%. That is *not* a
+> stability failure: the verdict only drops to WARN/FAIL for **blocking**,
+> **errors/unreachability**, or an **all-zero** hit rate (which would suggest a
+> broken selector rather than an absent part). Tip: keep `--max-products` low
+> (e.g. `1`) for the two-stage ECA crawler so a big sweep stays fast.
+
 Each vendor gets a **PASS / WARN / FAIL** verdict:
 
 | verdict | meaning |

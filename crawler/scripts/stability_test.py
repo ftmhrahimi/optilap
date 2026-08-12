@@ -38,6 +38,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from optilap_crawler.bom import read_all_sheets, unique_parts  # noqa: E402
 from optilap_crawler.fetch import DEFAULT_HEADERS  # noqa: E402
 from optilap_crawler.registry import all_vendor_names  # noqa: E402
 from optilap_crawler.stability import (  # noqa: E402
@@ -228,7 +229,14 @@ def _parse_args(argv=None):
     p.add_argument("--vendor", action="append", dest="vendors",
                    help="Vendor to test (repeatable). Default: all registered.")
     p.add_argument("--parts", help="Comma-separated parts. Default: LM358,NE555,ATMEGA328")
-    p.add_argument("--repeat", type=int, default=3, help="Trials per (vendor, part)")
+    p.add_argument("--bom", help="Path to a (multi-sheet) BOM .xlsx to draw parts from")
+    p.add_argument("--sheets", help="Comma-separated BOM sheet names to use (default: all)")
+    p.add_argument("--per-sheet", type=int, default=5,
+                   help="BOM mode: parts sampled per sheet (0 = all lines). Default 5")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Cap the total number of unique parts tested")
+    p.add_argument("--repeat", type=int, default=None,
+                   help="Trials per (vendor, part). Default: 1 in --bom mode, else 3")
     p.add_argument("--delay", type=float, default=1.0, help="Seconds between requests")
     p.add_argument("--timeout", type=int, default=30, help="Per-request timeout (s)")
     p.add_argument("--max-products", type=int, default=5,
@@ -237,15 +245,42 @@ def _parse_args(argv=None):
     return p.parse_args(argv)
 
 
+def _resolve_parts(args) -> List[str]:
+    """Build the part list from --bom (all sheets), --parts, or the defaults."""
+    if args.bom:
+        sheets = ([s.strip() for s in args.sheets.split(",") if s.strip()]
+                  if args.sheets else None)
+        per_sheet = args.per_sheet if args.per_sheet and args.per_sheet > 0 else None
+        lines = read_all_sheets(args.bom, sheets=sheets, per_sheet=per_sheet)
+        used_sheets = sorted({ln.sheet for ln in lines}, key=lambda s: (len(s), s))
+        parts = unique_parts(lines)
+        print(f"BOM: {len(lines)} line(s) across {len(used_sheets)} sheet(s) "
+              f"({', '.join(used_sheets)}) -> {len(parts)} unique part(s)",
+              file=sys.stderr)
+        return parts
+    if args.parts:
+        return [p.strip() for p in args.parts.split(",") if p.strip()]
+    return list(DEFAULT_PARTS)
+
+
 def main(argv=None) -> int:
     args = _parse_args(argv)
     vendors = args.vendors or all_vendor_names()
-    parts = ([p.strip() for p in args.parts.split(",") if p.strip()]
-             if args.parts else list(DEFAULT_PARTS))
+    parts = _resolve_parts(args)
+    if args.limit:
+        parts = parts[: args.limit]
+    repeat = args.repeat if args.repeat is not None else (1 if args.bom else 3)
 
+    if not parts:
+        print("No parts to test.", file=sys.stderr)
+        return 2
+
+    total = len(vendors) * len(parts) * repeat
     print(f"Stability test: {len(vendors)} vendor(s) x {len(parts)} part(s) "
-          f"x {args.repeat} = {len(vendors) * len(parts) * args.repeat} trials "
-          f"(delay {args.delay}s)\n", file=sys.stderr)
+          f"x {repeat} = {total} trials (delay {args.delay}s)", file=sys.stderr)
+    est_s = total * args.delay
+    print(f"  ~{est_s/60:.0f} min minimum from the delay alone "
+          f"(two-stage vendors add per-product fetches)\n", file=sys.stderr)
 
     def factory(vendor: str) -> HttpRecordingFetcher:
         return HttpRecordingFetcher(timeout=args.timeout)
@@ -254,7 +289,7 @@ def main(argv=None) -> int:
         vendors=vendors,
         parts=parts,
         fetcher_factory=factory,
-        repeat=args.repeat,
+        repeat=repeat,
         delay_s=args.delay,
         max_products=args.max_products,
         on_trial=_print_trial,
