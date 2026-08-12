@@ -25,13 +25,17 @@ def test_parse_product_in_stock():
     assert offer is not None
     assert offer.vendor == "ECA"
     assert "LM358" in (offer.title or "")
-    assert offer.price_amount == Decimal("85000")
-    assert offer.price_currency == "IRT"
-    assert offer.price_rial == Decimal("850000")
+    # ECA shows Rial directly.
+    assert offer.price_amount == Decimal("62300")
+    assert offer.price_currency == "IRR"
+    assert offer.price_rial == Decimal("62300")
+    # In stock, from the scoped .stock-badge-inline (NOT the JS 'ناموجود').
     assert offer.in_stock is True
-    assert offer.stock_qty == 27
-    assert offer.package == "DIP-8"
-    assert offer.part_type == "Original"
+    assert offer.availability == "in_stock"
+    assert offer.package == "DIP"
+    # No authenticity badge on ECA -> type is unknown, NOT a false "Copy"
+    # (from the "کپی لینک" share button / review), NOT the "نوع قطعه" category.
+    assert offer.part_type is None
 
 
 def test_parse_product_skips_empty_page():

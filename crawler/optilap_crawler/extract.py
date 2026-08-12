@@ -50,7 +50,14 @@ def looks_like_price(text: str) -> bool:
 
 
 def text_of(soup: BeautifulSoup) -> str:
-    """Full visible text, digit-normalized, newline-joined."""
+    """Visible text only (scripts/styles stripped), digit-normalized.
+
+    BeautifulSoup.get_text() otherwise includes <script>/<style> contents. An
+    ECA product page, for example, has the literal string 'ناموجود' inside a JS
+    price helper — which would wrongly flag an in-stock item as out of stock.
+    """
+    for tag in soup(["script", "style", "noscript", "template"]):
+        tag.decompose()
     return normalize_digits(soup.get_text("\n", strip=True))
 
 
@@ -176,16 +183,56 @@ def _line_with(norm_text: str, pattern: "re.Pattern") -> Optional[str]:
     return None
 
 
+def _classify_stock_text(text: str, classes: str = "") -> Optional[StockInfo]:
+    """Classify one availability string (out / on-order / in-stock) or None.
+
+    Out-of-stock is checked before in-stock ("ناموجود" contains "موجود"); a bare
+    "N عدد" is not a stock quantity (packaging), so quantity needs an
+    "انبار/موجود/stock" context.
+    """
+    elead = _LEAD_TIME_RE.search(text)
+    lead = None
+    if elead:
+        try:
+            lead = int(elead.group(1).replace(",", ""))
+        except ValueError:
+            lead = None
+    if "out-of-stock" in classes or "unavailable" in classes or _OUT_OF_STOCK_RE.search(text):
+        return StockInfo(None, False, "out_of_stock", lead, _line_with(text, _OUT_OF_STOCK_RE) or text or "out of stock")
+    if _ON_ORDER_RE.search(text):
+        return StockInfo(None, False, "on_order", lead, _line_with(text, _ON_ORDER_RE) or text)
+    m_qty = _STOCK_QTY_RE.search(text)
+    if m_qty:
+        digits = m_qty.group(1) or m_qty.group(2) or m_qty.group(3)
+        qty = int(digits.replace(",", ""))
+        return StockInfo(qty, qty > 0, "in_stock" if qty > 0 else "out_of_stock", None, m_qty.group(0).strip())
+    if "in-stock" in classes or "available" in classes or _IN_STOCK_RE.search(text):
+        return StockInfo(None, True, "in_stock", None, text.strip() or "in stock")
+    return None
+
+
 def find_stock(soup: BeautifulSoup, selectors: Sequence[str], norm_text: str) -> StockInfo:
     """Classify availability into in_stock / out_of_stock / on_order (+ lead time).
 
-    Order matters:
-      * a "N عدد" packaging count is NOT stock, so quantity requires an
-        "انبار/موجود/stock" context;
-      * "در حال تامین / پیش‌خرید" (being supplied) is distinct from plain
-        "ناموجود" (out of stock) and is checked first;
-      * "تحویل N روزه" gives the lead time for back-ordered items.
+    A product page is full of unrelated availability text (related products,
+    reviews). So if the vendor gives a stock selector and one matches, we trust
+    ONLY that scoped element; otherwise we fall back to the whole (card) text —
+    which is what card-scoped callers like JavanElec pass in.
     """
+    for sel in selectors:
+        el = first_in(soup, [sel])
+        if el is None:
+            continue
+        info = _classify_stock_text(
+            normalize_digits(el.get_text(" ", strip=True)), " ".join(el.get("class", []))
+        )
+        if info is not None:
+            return info
+        break  # element matched but was ambiguous -> use whole-text fallback
+
+    info = _classify_stock_text(norm_text)
+    if info is not None:
+        return info
     lead = None
     ml = _LEAD_TIME_RE.search(norm_text)
     if ml:
@@ -193,34 +240,6 @@ def find_stock(soup: BeautifulSoup, selectors: Sequence[str], norm_text: str) ->
             lead = int(ml.group(1).replace(",", ""))
         except ValueError:
             lead = None
-
-    if _ON_ORDER_RE.search(norm_text):
-        return StockInfo(None, False, "on_order", lead, _line_with(norm_text, _ON_ORDER_RE))
-    if _OUT_OF_STOCK_RE.search(norm_text):
-        return StockInfo(None, False, "out_of_stock", lead, _line_with(norm_text, _OUT_OF_STOCK_RE))
-
-    m_qty = _STOCK_QTY_RE.search(norm_text)
-    if m_qty:
-        digits = m_qty.group(1) or m_qty.group(2) or m_qty.group(3)
-        qty = int(digits.replace(",", ""))
-        return StockInfo(qty, qty > 0, "in_stock" if qty > 0 else "out_of_stock",
-                         None, m_qty.group(0).strip())
-
-    for sel in selectors:
-        el = first_in(soup, [sel])
-        if el is None:
-            continue
-        classes = " ".join(el.get("class", []))
-        txt = normalize_digits(el.get_text(" ", strip=True))
-        if "out-of-stock" in classes or "unavailable" in classes or _OUT_OF_STOCK_RE.search(txt):
-            return StockInfo(None, False, "out_of_stock", lead, txt or "out of stock")
-        if "in-stock" in classes or "available" in classes or _IN_STOCK_RE.search(txt):
-            qm = re.search(r"(\d+)", txt)
-            qty = int(qm.group(1)) if qm else None
-            return StockInfo(qty, True, "in_stock", None, txt or "in stock")
-
-    if _IN_STOCK_RE.search(norm_text):
-        return StockInfo(None, True, "in_stock", None, "in stock")
     return StockInfo(None, None, None, lead, None)
 
 
@@ -257,20 +276,16 @@ def find_package(soup: BeautifulSoup, norm_text: str) -> Optional[str]:
 
 
 def find_part_type(soup: BeautifulSoup, norm_text: str, default: Optional[str] = None) -> Optional[str]:
-    """Detect Original / Copy / Refurbished.
+    """Detect Original / Copy / Refurbished — conservatively.
 
-    Iranian shops flag non-genuine parts with a badge: "کپی" (copy) or
-    "بازسازی شده" (refurbished); genuine parts carry no badge. We deliberately do
-    NOT match a generic English "Type" label — on op-amps that is the amplifier
-    configuration ("Single/Dual"), not the part authenticity.
+    We do NOT scan the whole page for "کپی"/"بازسازی": those words also appear in
+    a "کپی لینک" (copy-link) button and in user reviews ("… اصل هست یا کپی؟"),
+    which caused false positives on ECA. We only trust a labelled "نوع قطعه"
+    field, and only when it actually names an authenticity keyword — on ECA that
+    field is the functional category ("آپ‌امپ"), so it correctly yields nothing.
+    A generic English "Type" label is ignored (it is the amplifier
+    configuration, e.g. "Single/Dual", not the part authenticity).
     """
-    if "بازسازی" in norm_text:
-        return "Refurbished"
-    if "کپی" in norm_text:
-        return "Copy"
-    if "اورجینال" in norm_text:
-        return "Original"
-    # A Persian "نوع قطعه" field, if the shop uses one.
     raw = _attribute_value(soup, ("نوع قطعه",)) or _labeled_value(norm_text, ("نوع قطعه",))
     if raw:
         low = raw.lower()
@@ -278,9 +293,8 @@ def find_part_type(soup: BeautifulSoup, norm_text: str, default: Optional[str] =
             return "Copy"
         if "بازسازی" in raw or "refurb" in low:
             return "Refurbished"
-        if "اورجینال" in raw or "original" in low:
+        if "اورجینال" in raw or "اوریجینال" in raw or "original" in low:
             return "Original"
-        return raw
     return default
 
 

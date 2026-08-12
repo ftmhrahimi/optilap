@@ -10,7 +10,7 @@ to feed the `referencePriceList` and the Scoring Engine.
 | Vendor | Platform | Search | Status |
 | --- | --- | --- | --- |
 | **JavanElectronic** | custom ASP.NET Core | `…/shop?searchfilter=` | verified — single-stage, reads price/stock/type/lead-time from the result cards |
-| **ECA** | PrestaShop | `…/search?controller=search&s=` | selectors from standard PrestaShop — **needs live calibration** |
+| **ECA** | PrestaShop | `…/search?controller=search&s=` | verified against live site (2-stage; scoped availability) |
 | **MicroModern** | Next.js (React) | `…/?q=…&post_type=product` | verified — reads product JSON embedded in the page |
 
 All three share one extraction engine (`extract.py`) for the Persian price /
